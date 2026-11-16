@@ -1,6 +1,6 @@
 # Frontier One
 
-Frontier One is a NASA Space Apps Challenge 2026 project.
+Frontier One is a NASA Space Apps Challenge 2026 project: a space simulator and junior astronaut mission trainer.
 
 ## Deploy to GitHub Pages
 
