@@ -1,4 +1,6 @@
-# React + TypeScript + Vite
+# Frontier One
+
+Frontier One is a NASA Space Apps Challenge 2026 project.
 
 ## Deploy to GitHub Pages
 
