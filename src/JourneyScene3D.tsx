@@ -12,6 +12,7 @@ type JourneyScene3DProps = {
   stationDepth: number
   stationDoorOpen: boolean
   shipBoarded: boolean
+  boardingProgress: number
   jumping: boolean
   onFirstPersonMove?: (dx: number, dy: number) => void
 }
@@ -137,17 +138,53 @@ const createStation = (doorOpen: boolean) => {
   groundPad.position.y = -0.18
   platform.add(groundPad)
 
-  const building = new THREE.Mesh(new THREE.BoxGeometry(5.2, 3.1, 4.2), standard(0xb9c4c0, 0.72, 0.12))
-  building.position.set(-0.4, 1.55, -1)
-  platform.add(building)
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.2, 4.2), standard(0x738487, 0.72, 0.12))
+  floor.position.set(-0.4, 0.05, -1)
+  platform.add(floor)
+  const console = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.9, 0.65), standard(0x344950, 0.55, 0.3))
+  console.position.set(-0.4, 0.55, -2.25)
+  platform.add(console)
+  const consoleScreen = new THREE.Mesh(
+    new THREE.BoxGeometry(1.8, 0.55, 0.08),
+    new THREE.MeshBasicMaterial({ color: 0x54d8ee }),
+  )
+  consoleScreen.position.set(-0.4, 1.45, -2.52)
+  platform.add(consoleScreen)
+  const interiorLight = new THREE.PointLight(0xb8efff, 4, 7)
+  interiorLight.position.set(-0.4, 2.6, -0.8)
+  platform.add(interiorLight)
+  const walls = [
+    { size: [5.2, 3.1, 0.18] as const, position: [-0.4, 1.55, -3.01] as const },
+    { size: [0.18, 3.1, 4.2] as const, position: [-2.91, 1.55, -1] as const },
+    { size: [0.18, 3.1, 1.25] as const, position: [2.11, 1.55, 0.475] as const },
+    { size: [0.18, 3.1, 1.25] as const, position: [2.11, 1.55, -2.425] as const },
+    { size: [0.18, 1.4, 1.65] as const, position: [2.11, 2.4, -1] as const },
+  ]
+  walls.forEach(({ size, position }) => {
+    const wall = new THREE.Mesh(
+      new THREE.BoxGeometry(size[0], size[1], size[2]),
+      standard(0xb9c4c0, 0.72, 0.12),
+    )
+    wall.position.set(position[0], position[1], position[2])
+    platform.add(wall)
+  })
+  const frontGlass = new THREE.Mesh(
+    new THREE.BoxGeometry(5.05, 2.85, 0.08),
+    new THREE.MeshStandardMaterial({
+      color: 0x75b9ca,
+      roughness: 0.25,
+      metalness: 0.2,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false,
+    }),
+  )
+  frontGlass.position.set(-0.4, 1.55, 1.08)
+  platform.add(frontGlass)
   const roof = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.22, 4.5), standard(0x40545b, 0.6, 0.25))
   roof.position.set(-0.4, 3.18, -1)
+  roof.userData.stationRoof = true
   platform.add(roof)
-  for (const x of [-1.8, -0.4, 1]) {
-    const window = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1, 0.12), standard(0x6da9bb, 0.3, 0.25))
-    window.position.set(x, 1.9, 1.12)
-    platform.add(window)
-  }
 
   const sideModule = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.1, 2.8), standard(0x89999a, 0.74, 0.12))
   sideModule.position.set(-4.4, 1.05, -1.2)
@@ -213,6 +250,7 @@ export default function JourneyScene3D({
   stationDepth,
   stationDoorOpen,
   shipBoarded,
+  boardingProgress,
   jumping,
   onFirstPersonMove,
 }: JourneyScene3DProps) {
@@ -226,6 +264,7 @@ export default function JourneyScene3D({
   const stationXRef = useRef(stationX)
   const stationDepthRef = useRef(stationDepth)
   const boardedRef = useRef(shipBoarded)
+  const boardingProgressRef = useRef(boardingProgress)
   const jumpingRef = useRef(jumping)
 
   useEffect(() => {
@@ -244,7 +283,7 @@ export default function JourneyScene3D({
       if (target instanceof HTMLElement && target.matches('input, textarea, select, [contenteditable="true"]')) return
       event.preventDefault()
       firstPersonRef.current = !firstPersonRef.current
-      lookYawRef.current = 0
+      lookYawRef.current = firstPersonRef.current ? Math.PI / 2 : 0
       lookPitchRef.current = 0
       setFirstPerson(firstPersonRef.current)
     }
@@ -284,12 +323,20 @@ export default function JourneyScene3D({
   }, [screen])
 
   useEffect(() => {
+    if (boardingProgress > 0 && firstPersonRef.current) {
+      firstPersonRef.current = false
+      setFirstPerson(false)
+    }
+  }, [boardingProgress])
+
+  useEffect(() => {
     progressRef.current = progress
     stationXRef.current = stationX
     stationDepthRef.current = stationDepth
     boardedRef.current = shipBoarded
+    boardingProgressRef.current = boardingProgress
     jumpingRef.current = jumping
-  }, [progress, stationX, stationDepth, shipBoarded, jumping])
+  }, [progress, stationX, stationDepth, shipBoarded, boardingProgress, jumping])
 
   useEffect(() => {
     const host = hostRef.current
@@ -341,7 +388,7 @@ export default function JourneyScene3D({
       rocket.position.set(3.8, 1.85, 2.5)
       astronaut = makeAstronaut()
       astronaut.scale.setScalar(1.4)
-      astronaut.position.set(stationXRef.current * 0.11 - 5.5, 0, 2.2 - stationDepthRef.current * 0.55)
+      astronaut.position.set(-0.4, 0, 0.2)
       earthStation.add(rocket)
       earthStation.add(astronaut)
     } else if (screen === 'launch') {
@@ -467,17 +514,38 @@ export default function JourneyScene3D({
       const currentProgress = progressRef.current / 100
       if (screen === 'earth') {
         if (earth) earth.rotation.y = CANADA_ROTATION_Y + time * 0.002
-        astronaut.position.x = stationXRef.current * 0.11 - 5.5
-        astronaut.position.z = 2.2 - stationDepthRef.current * 0.55
-        astronaut.position.y = jumpingRef.current ? 0.4 + Math.abs(Math.sin(time * 6)) * 0.5 : 0
-        if (firstPersonRef.current && !boardedRef.current) {
+        const boarding = boardingProgressRef.current / 100
+        if (earthStation) {
+          earthStation.traverse((object) => {
+            if (object.userData.stationRoof) object.visible = !firstPersonRef.current
+          })
+        }
+        if (boarding > 0) {
+          const route = boarding < 0.25
+            ? { from: [-0.4, 0.2], to: [1.45, -1], progress: boarding / 0.25 }
+            : boarding < 0.4
+              ? { from: [1.45, -1], to: [2.4, -1], progress: (boarding - 0.25) / 0.15 }
+              : { from: [2.4, -1], to: [3.8, 2.5], progress: Math.min((boarding - 0.4) / 0.32, 1) }
+          const walk = route.progress * route.progress * (3 - 2 * route.progress)
+          astronaut.position.x = route.from[0] + (route.to[0] - route.from[0]) * walk
+          astronaut.position.z = route.from[1] + (route.to[1] - route.from[1]) * walk
+          astronaut.position.y = boarding > 0.72 ? Math.min((boarding - 0.72) / 0.28, 1) * 0.8 : 0
+        } else {
+          astronaut.position.x = stationXRef.current * 0.11 - 5.5
+          astronaut.position.z = 0.2 - stationDepthRef.current * 0.55
+          astronaut.position.y = jumpingRef.current ? 0.4 + Math.abs(Math.sin(time * 6)) * 0.5 : 0
+        }
+        if (firstPersonRef.current && !boardedRef.current && boarding === 0) {
           astronaut.visible = false
-          const eye = new THREE.Vector3(astronaut.position.x, astronaut.position.y + 1.8, astronaut.position.z - 0.45)
-          const lookDirection = new THREE.Vector3(
+          const eye = astronaut.localToWorld(new THREE.Vector3(0, 1.8, 0))
+          const localLookDirection = new THREE.Vector3(
             Math.cos(lookYawRef.current) * Math.cos(lookPitchRef.current),
             Math.sin(lookPitchRef.current),
             -Math.sin(lookYawRef.current) * Math.cos(lookPitchRef.current),
           )
+          const lookDirection = earthStation
+            ? earthStation.localToWorld(localLookDirection).sub(earthStation.localToWorld(new THREE.Vector3()))
+            : localLookDirection
           camera.position.lerp(eye, 0.18)
           camera.lookAt(camera.position.clone().add(lookDirection))
         } else {

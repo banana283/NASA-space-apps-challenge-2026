@@ -1,4 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import sciFiTrackOne from './assets/Sci-Fi 1.mp3'
+import sciFiTrackTwo from './assets/Sci-fi 2.mp3'
+import marsMicRecording from './assets/scam-mic-sol001-run001.wav'
 import './App.css'
 
 const JourneyScene3D = lazy(() => import('./JourneyScene3D'))
@@ -488,10 +491,12 @@ const getTerrainUrl = (planet: Planet, x: number, y: number) => {
 
 function MusicToggle({
   enabled,
+  trackName,
   error,
   onToggle,
 }: {
   enabled: boolean
+  trackName: string | null
   error: string | null
   onToggle: () => void
 }) {
@@ -500,10 +505,10 @@ function MusicToggle({
       <button
         className="music-toggle"
         aria-pressed={enabled}
-        title="Toggle the Sci-Fi 1 soundtrack from the supplied music pack"
+        title={enabled ? `Stop ${trackName}` : 'Play a randomly selected sci-fi track'}
         onClick={onToggle}
       >
-        Music: Sci-Fi 1 {enabled ? 'On' : 'Off'}
+        {enabled ? `Music: ${trackName} · On` : 'Play music'}
       </button>
       {error && <span className="music-error" role="status">{error}</span>}
     </span>
@@ -518,10 +523,12 @@ function App() {
   const [spaceProgress, setSpaceProgress] = useState(0)
   const [returningToEarth, setReturningToEarth] = useState(false)
   const [result, setResult] = useState<ResultType>(null)
-  const [stationX, setStationX] = useState(12)
+  const [stationX, setStationX] = useState(46)
   const [stationDepth, setStationDepth] = useState(0)
   const [stationDoorOpen, setStationDoorOpen] = useState(false)
   const [shipBoarded, setShipBoarded] = useState(false)
+  const [crewBoarding, setCrewBoarding] = useState(false)
+  const [boardingProgress, setBoardingProgress] = useState(0)
   const [stationStatus, setStationStatus] = useState('Station secure · Airlock sealed · Vehicle on standby')
   const [playerPosition, setPlayerPosition] = useState<PlayerPosition>({ x: 50, y: 16, worldX: 0, worldY: 0 })
   const [mapCenter, setMapCenter] = useState({ x: 0, y: 0 })
@@ -546,6 +553,7 @@ function App() {
   const [baseRadioDelayMs, setBaseRadioDelayMs] = useState(1800)
   const baseRadioMessageId = useRef(0)
   const [musicEnabled, setMusicEnabled] = useState(false)
+  const [musicTrackName, setMusicTrackName] = useState<string | null>(null)
   const [musicError, setMusicError] = useState<string | null>(null)
   const musicAudio = useRef<HTMLAudioElement | null>(null)
   const [marsAmbientError, setMarsAmbientError] = useState<string | null>(null)
@@ -579,7 +587,14 @@ function App() {
     }
 
     try {
+      const tracks = [
+        { name: 'Sci-Fi 1', src: sciFiTrackOne },
+        { name: 'Sci-Fi 2', src: sciFiTrackTwo },
+      ]
+      const selectedTrack = tracks[Math.floor(Math.random() * tracks.length)]
+      audio.src = selectedTrack.src
       await audio.play()
+      setMusicTrackName(selectedTrack.name)
       setMusicEnabled(true)
       setMusicError(null)
     } catch {
@@ -722,20 +737,38 @@ function App() {
   }
 
   const interactAtStation = useCallback(() => {
-    if (stationX < 54) {
-      setStationStatus('No interface response')
-    } else if (!stationDoorOpen) {
+    if (!shipBoarded && !crewBoarding) {
       setStationDoorOpen(true)
-      setStationStatus('Airlock cycle complete · Hatch status: open')
-    } else if (!shipBoarded && stationX < 78) {
-      setStationStatus('Vehicle systems · Standby')
-    } else if (!shipBoarded) {
-      setShipBoarded(true)
-      setStationStatus('Cabin pressure nominal · Flight systems available')
-    } else {
+      setBoardingProgress(0)
+      setCrewBoarding(true)
+      setStationStatus('Airlock cycling · Crew member exiting the station')
+    } else if (shipBoarded) {
       beginMission(selectedPlanet, mission.siteId)
     }
-  }, [stationX, stationDoorOpen, shipBoarded, selectedPlanet, mission.siteId])
+  }, [crewBoarding, shipBoarded, selectedPlanet, mission.siteId])
+
+  useEffect(() => {
+    if (!crewBoarding) return
+
+    const duration = 6500
+    let frame = 0
+    const startedAt = performance.now()
+    const animateBoarding = (now: number) => {
+      const progress = Math.min((now - startedAt) / duration, 1)
+      setBoardingProgress(progress * 100)
+      if (progress < 1) {
+        frame = window.requestAnimationFrame(animateBoarding)
+        return
+      }
+
+      setCrewBoarding(false)
+      setShipBoarded(true)
+      setStationStatus('Crew aboard · Cabin pressure nominal · Flight systems ready')
+    }
+
+    frame = window.requestAnimationFrame(animateBoarding)
+    return () => window.cancelAnimationFrame(frame)
+  }, [crewBoarding])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1414,10 +1447,12 @@ function App() {
     setReturningToEarth(false)
     const siteId = mission.planet === selectedPlanet ? mission.siteId : baseSites[selectedPlanet][0].id
     setMission(createMissionState(selectedPlanet, siteId))
-    setStationX(12)
+    setStationX(46)
     setStationDepth(0)
     setStationDoorOpen(false)
     setShipBoarded(false)
+    setCrewBoarding(false)
+    setBoardingProgress(0)
     setInventoryOpen(false)
     setInsideHabitat(false)
     setInteractionMessage('')
@@ -1464,13 +1499,12 @@ function App() {
     <div className="game-shell">
     <audio
       ref={musicAudio}
-      src={`${import.meta.env.BASE_URL}music/sci-fi-1-loop.ogg`}
       loop
       preload="none"
     />
     <audio
       ref={marsAmbientAudio}
-      src={`${import.meta.env.BASE_URL}music/mars-sol001.ogg`}
+      src={marsMicRecording}
       preload="none"
     />
     {screen === 'earth' && (
@@ -1505,7 +1539,7 @@ function App() {
               </select>
             </div>
             <div className="station-header-tools">
-              <MusicToggle enabled={musicEnabled} error={musicError} onToggle={toggleMusic} />
+              <MusicToggle enabled={musicEnabled} trackName={musicTrackName} error={musicError} onToggle={toggleMusic} />
               <button className="help-button" onClick={() => setHowToOpen(true)}>How to use</button>
             </div>
         </header>
@@ -1521,6 +1555,7 @@ function App() {
               stationDepth={stationDepth}
               stationDoorOpen={stationDoorOpen}
               shipBoarded={shipBoarded}
+              boardingProgress={boardingProgress}
               jumping={jumping}
               onFirstPersonMove={(dx, dy) => {
                 setStationX((x) => clamp(x + dx * 2.2, 4, stationDoorOpen ? 95 : 61))
@@ -1535,8 +1570,12 @@ function App() {
               <strong>{stationStatus}</strong>
               <p>Earth space station · Canada · Flight plan: {selectedPlanet} / {getCurrentSite(selectedPlanet, mission.siteId).label}</p>
             </div>
-            <button className="primary-button" onClick={interactAtStation}>
-              Interact · E
+            <button className="primary-button" onClick={interactAtStation} disabled={crewBoarding}>
+              {crewBoarding
+                ? 'Crew boarding…'
+                : shipBoarded
+                  ? `Launch to ${selectedPlanet} · E`
+                  : 'Open airlock · Board rocket · E'}
             </button>
         </div>
 
@@ -1560,10 +1599,10 @@ function App() {
                 <div><dt>Move / back up</dt><dd>WASD or arrow keys · in first-person, movement follows your view</dd></div>
                 <div><dt>Jump</dt><dd>Space</dd></div>
                 <div><dt>Camera view</dt><dd>Q toggles first- and third-person; move the mouse to look around in first-person</dd></div>
-                <div><dt>Interact at station</dt><dd>E or the Interact button</dd></div>
+                <div><dt>Board and launch</dt><dd>Press E or Open airlock to watch the astronaut exit the station and board the rocket, then press Launch to depart</dd></div>
                 <div><dt>Inventory on surface</dt><dd>I, or Esc to close</dd></div>
                 <div><dt>Explore</dt><dd>E extracts nearby resources or exits; H enters your habitat; G digs by hand, then starts the machine digger for deep drilling</dd></div>
-                <div><dt>Mars ambience</dt><dd>A NASA Mars recording plays occasionally while exploring Mars, even with music enabled</dd></div>
+                <div><dt>Mars microphone recording</dt><dd>A recording plays at random intervals while exploring Mars, even with music enabled</dd></div>
                 <div><dt>Build</dt><dd>Open inventory and try placing habitat parts near the landing site</dd></div>
                 <div><dt>Mission tasks</dt><dd>Choose any available field activity; no numbered job sequence</dd></div>
                 <div><dt>Mission outcome</dt><dd>Return to Earth after 30 consecutive safe sols for full mission success. A safe early return also succeeds; returning with any survival reading below 50% fails. The mission can also fail if all five readings fall below 50% together.</dd></div>
@@ -1589,11 +1628,12 @@ function App() {
             stationDepth={stationDepth}
             stationDoorOpen={stationDoorOpen}
             shipBoarded={shipBoarded}
+            boardingProgress={boardingProgress}
             jumping={jumping}
           />
         </Suspense>
         <div className="journey-audio-control">
-          <MusicToggle enabled={musicEnabled} error={musicError} onToggle={toggleMusic} />
+          <MusicToggle enabled={musicEnabled} trackName={musicTrackName} error={musicError} onToggle={toggleMusic} />
         </div>
       </section>
     )}
@@ -1610,11 +1650,12 @@ function App() {
             stationDepth={stationDepth}
             stationDoorOpen={stationDoorOpen}
             shipBoarded={shipBoarded}
+            boardingProgress={boardingProgress}
             jumping={jumping}
           />
         </Suspense>
         <div className="journey-audio-control">
-          <MusicToggle enabled={musicEnabled} error={marsAmbientError ?? musicError} onToggle={toggleMusic} />
+          <MusicToggle enabled={musicEnabled} trackName={musicTrackName} error={marsAmbientError ?? musicError} onToggle={toggleMusic} />
         </div>
       </section>
     )}
@@ -1631,11 +1672,12 @@ function App() {
             stationDepth={stationDepth}
             stationDoorOpen={stationDoorOpen}
             shipBoarded={shipBoarded}
+            boardingProgress={boardingProgress}
             jumping={jumping}
           />
         </Suspense>
         <div className="journey-audio-control">
-          <MusicToggle enabled={musicEnabled} error={marsAmbientError ?? musicError} onToggle={toggleMusic} />
+          <MusicToggle enabled={musicEnabled} trackName={musicTrackName} error={marsAmbientError ?? musicError} onToggle={toggleMusic} />
         </div>
       </section>
     )}
@@ -1721,7 +1763,7 @@ function App() {
                   Radio · Satellite link
                 </button>
               )}
-              <MusicToggle enabled={musicEnabled} error={musicError} onToggle={toggleMusic} />
+              <MusicToggle enabled={musicEnabled} trackName={musicTrackName} error={musicError} onToggle={toggleMusic} />
             </div>
           </div>
 
@@ -2143,13 +2185,14 @@ function App() {
             stationDepth={stationDepth}
             stationDoorOpen={stationDoorOpen}
             shipBoarded={shipBoarded}
+            boardingProgress={boardingProgress}
             jumping={jumping}
           />
         </Suspense>
         <div className="summary-card">
           <p className="eyebrow">Mission outcome</p>
           <h2>{result === 'success' ? 'Mission successful' : 'Mission failed'}</h2>
-          <MusicToggle enabled={musicEnabled} error={musicError} onToggle={toggleMusic} />
+          <MusicToggle enabled={musicEnabled} trackName={musicTrackName} error={musicError} onToggle={toggleMusic} />
           <p>{summaryText}</p>
           <ul className="mission-outcome-list">
             {missionOutcomeReasons.map((reason) => (
