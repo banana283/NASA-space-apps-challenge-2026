@@ -4,10 +4,10 @@ import * as THREE from 'three'
 type Surface3DSceneProps = {
   planet: 'Moon' | 'Mars'
   terrainUrl: string
-  playerX: number
-  playerY: number
   playerLongitude: number
   playerLatitude: number
+  mapCenterLongitude: number
+  mapCenterLatitude: number
   baseLongitude: number
   baseLatitude: number
   farmBuilt: boolean
@@ -31,6 +31,8 @@ type SceneRuntime = {
   scene: THREE.Scene
   renderer: THREE.WebGLRenderer
   camera: THREE.PerspectiveCamera
+  groundMaterial: THREE.MeshStandardMaterial
+  terrainTexture: THREE.Texture | null
   terrainGround: THREE.Mesh
   subsurfaceGround: THREE.Mesh
   outpost: THREE.Group
@@ -50,6 +52,10 @@ type SceneRuntime = {
 const makeMaterial = (color: number, roughness = 0.85, metalness = 0) =>
   new THREE.MeshStandardMaterial({ color, roughness, metalness })
 const HAND_DIG_LIMIT = 5
+const TERRAIN_TILE_WIDTH = 16
+const TERRAIN_TILE_HEIGHT = 8
+const TERRAIN_WORLD_WIDTH = TERRAIN_TILE_WIDTH * 5.456
+const TERRAIN_WORLD_HEIGHT = TERRAIN_TILE_HEIGHT * 9.093
 
 const createAstronaut = () => {
   const astronaut = new THREE.Group()
@@ -418,14 +424,19 @@ const createExcavation = (depth: number) => {
 
 const createTerrainGeometry = (holes: { x: number; z: number }[], radius = 0.92) => {
   const shape = new THREE.Shape()
-  shape.moveTo(-90, -65)
-  shape.lineTo(90, -65)
-  shape.lineTo(90, 65)
-  shape.lineTo(-90, 65)
+  shape.moveTo(-TERRAIN_WORLD_WIDTH / 2, -TERRAIN_WORLD_HEIGHT / 2)
+  shape.lineTo(TERRAIN_WORLD_WIDTH / 2, -TERRAIN_WORLD_HEIGHT / 2)
+  shape.lineTo(TERRAIN_WORLD_WIDTH / 2, TERRAIN_WORLD_HEIGHT / 2)
+  shape.lineTo(-TERRAIN_WORLD_WIDTH / 2, TERRAIN_WORLD_HEIGHT / 2)
   shape.closePath()
 
   holes.forEach(({ x, z }) => {
-    if (x < -89 || x > 89 || z < -64 || z > 64) return
+    if (
+      x < -TERRAIN_WORLD_WIDTH / 2 + radius ||
+      x > TERRAIN_WORLD_WIDTH / 2 - radius ||
+      z < -TERRAIN_WORLD_HEIGHT / 2 + radius ||
+      z > TERRAIN_WORLD_HEIGHT / 2 - radius
+    ) return
     const opening = new THREE.Path()
     opening.absellipse(x, -z, radius, radius, 0, Math.PI * 2, true, 0)
     shape.holes.push(opening)
@@ -437,8 +448,8 @@ const createTerrainGeometry = (holes: { x: number; z: number }[], radius = 0.92)
   for (let index = 0; index < positions.count; index += 1) {
     const x = positions.getX(index)
     const y = positions.getY(index)
-    uvs[index * 2] = (x + 90) / 180
-    uvs[index * 2 + 1] = (y + 65) / 130
+    uvs[index * 2] = (x + TERRAIN_WORLD_WIDTH / 2) / TERRAIN_WORLD_WIDTH
+    uvs[index * 2 + 1] = (y + TERRAIN_WORLD_HEIGHT / 2) / TERRAIN_WORLD_HEIGHT
   }
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   geometry.computeVertexNormals()
@@ -650,10 +661,10 @@ const createRocks = (scene: THREE.Scene, planet: 'Moon' | 'Mars') => {
 export default function Surface3DScene({
   planet,
   terrainUrl,
-  playerX,
-  playerY,
   playerLongitude,
   playerLatitude,
+  mapCenterLongitude,
+  mapCenterLatitude,
   baseLongitude,
   baseLatitude,
   farmBuilt,
@@ -674,6 +685,7 @@ export default function Surface3DScene({
 }: Surface3DSceneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const runtimeRef = useRef<SceneRuntime | null>(null)
+  const [runtimeVersion, setRuntimeVersion] = useState(0)
   const firstPersonRef = useRef(false)
   const insideHabitatRef = useRef(insideHabitat)
   const resourceDepositsRef = useRef(resourceDeposits)
@@ -790,28 +802,17 @@ export default function Surface3DScene({
       roughness: 1,
       metalness: 0,
     })
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(180, 130, 1, 1), groundMaterial)
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(TERRAIN_WORLD_WIDTH, TERRAIN_WORLD_HEIGHT, 1, 1), groundMaterial)
     ground.rotation.x = -Math.PI / 2
     ground.position.y = -0.18
     scene.add(ground)
     const subsurface = new THREE.Mesh(
-      new THREE.PlaneGeometry(180, 130),
+      new THREE.PlaneGeometry(TERRAIN_WORLD_WIDTH, TERRAIN_WORLD_HEIGHT),
       makeMaterial(0x9e4932, 1),
     )
     subsurface.rotation.x = -Math.PI / 2
     subsurface.position.y = -0.62
     scene.add(subsurface)
-
-    const textureLoader = new THREE.TextureLoader()
-    textureLoader.setCrossOrigin('anonymous')
-    const terrainTexture = textureLoader.load(terrainUrl, (texture) => {
-      texture.colorSpace = THREE.SRGBColorSpace
-      texture.anisotropy = renderer.capabilities.getMaxAnisotropy()
-      groundMaterial.map = texture
-      groundMaterial.color.set(0xffffff)
-      groundMaterial.needsUpdate = true
-    })
-    terrainTexture.colorSpace = THREE.SRGBColorSpace
 
     createRocks(scene, planet)
     const outpost = new THREE.Group()
@@ -926,6 +927,8 @@ export default function Surface3DScene({
       scene,
       renderer,
       camera,
+      groundMaterial,
+      terrainTexture: null,
       terrainGround: ground,
       subsurfaceGround: subsurface,
       outpost,
@@ -941,13 +944,14 @@ export default function Surface3DScene({
       jumpStartedAt: null,
       frame,
     }
+    setRuntimeVersion((version) => version + 1)
     frame()
 
     return () => {
       window.cancelAnimationFrame(frameId)
       resizeObserver.disconnect()
+      runtimeRef.current?.terrainTexture?.dispose()
       runtimeRef.current = null
-      terrainTexture.dispose()
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
           object.geometry.dispose()
@@ -958,22 +962,49 @@ export default function Surface3DScene({
       renderer.dispose()
       if (host.contains(renderer.domElement)) host.removeChild(renderer.domElement)
     }
-  }, [planet, terrainUrl, habitatParts, shielding, solarPanelCount, nuclearReactorCount, rtgCount, baseExpansionCount])
+  }, [planet, habitatParts, shielding, solarPanelCount, nuclearReactorCount, rtgCount, baseExpansionCount])
 
   useEffect(() => {
     const runtime = runtimeRef.current
     if (!runtime) return
-    const worldX = (playerX - 50) * 0.62
-    const worldZ = (46 - playerY) * 0.62
+
+    const loader = new THREE.TextureLoader()
+    loader.setCrossOrigin('anonymous')
+    const texture = loader.load(terrainUrl, (loaded) => {
+      if (runtimeRef.current !== runtime || runtime.terrainTexture !== loaded) {
+        loaded.dispose()
+        return
+      }
+      loaded.colorSpace = THREE.SRGBColorSpace
+      loaded.anisotropy = runtime.renderer.capabilities.getMaxAnisotropy()
+      runtime.groundMaterial.map = loaded
+      runtime.groundMaterial.color.set(0xffffff)
+      runtime.groundMaterial.needsUpdate = true
+    })
+    texture.colorSpace = THREE.SRGBColorSpace
+    runtime.terrainTexture?.dispose()
+    runtime.terrainTexture = texture
+
+    return () => {
+      if (runtime.terrainTexture === texture) {
+        runtime.terrainTexture = null
+        runtime.groundMaterial.map = null
+        runtime.groundMaterial.color.set(planet === 'Moon' ? 0x777772 : 0xa2583e)
+        runtime.groundMaterial.needsUpdate = true
+        texture.dispose()
+      }
+    }
+  }, [planet, terrainUrl, runtimeVersion])
+
+  useEffect(() => {
+    const runtime = runtimeRef.current
+    if (!runtime) return
+    const worldX = (((playerLongitude - mapCenterLongitude + 540) % 360) - 180) * 5.456
+    const worldZ = -(playerLatitude - mapCenterLatitude) * 9.093
     runtime.astronaut.position.set(worldX, 0, worldZ)
-    const longitudeDelta = ((baseLongitude - playerLongitude + 540) % 360) - 180
-    const latitudeDelta = baseLatitude - playerLatitude
-    // Keep the outpost at its landing coordinates when the local map window wraps.
-    runtime.outpost.position.set(
-      worldX + longitudeDelta * (2.2 * 0.62 / 0.25),
-      0,
-      worldZ - latitudeDelta * (2.2 * 0.62 / 0.15),
-    )
+    const baseLongitudeFromTile = ((baseLongitude - mapCenterLongitude + 540) % 360) - 180
+    const baseLatitudeFromTile = baseLatitude - mapCenterLatitude
+    runtime.outpost.position.set(baseLongitudeFromTile * 5.456, 0, -baseLatitudeFromTile * 9.093)
     const anchorLongitudeDelta = habitatAnchor
       ? ((habitatAnchor.longitude - baseLongitude + 540) % 360) - 180
       : 0
@@ -983,9 +1014,9 @@ export default function Surface3DScene({
     resourceDeposits.forEach((deposit) => {
       const node = runtime.resourceNodes.get(deposit.id)
       if (!node) return
-      const longitudeDelta = ((deposit.longitude - playerLongitude + 540) % 360) - 180
-      const latitudeDelta = deposit.latitude - playerLatitude
-      node.position.set(worldX + longitudeDelta * 5.456, 0, worldZ - latitudeDelta * 9.093)
+      const longitudeDelta = ((deposit.longitude - mapCenterLongitude + 540) % 360) - 180
+      const latitudeDelta = deposit.latitude - mapCenterLatitude
+      node.position.set(longitudeDelta * 5.456, 0, -latitudeDelta * 9.093)
       node.visible = deposit.remaining > 0
     })
     const terrainHoles: { x: number; z: number }[] = []
@@ -1004,9 +1035,9 @@ export default function Surface3DScene({
         runtime.scene.add(hole)
       }
       hole.userData.depth = excavation.depth
-      const longitudeDelta = ((excavation.longitude - playerLongitude + 540) % 360) - 180
-      const latitudeDelta = excavation.latitude - playerLatitude
-      hole.position.set(worldX + longitudeDelta * 5.456, 0, worldZ - latitudeDelta * 9.093)
+      const longitudeDelta = ((excavation.longitude - mapCenterLongitude + 540) % 360) - 180
+      const latitudeDelta = excavation.latitude - mapCenterLatitude
+      hole.position.set(longitudeDelta * 5.456, 0, -latitudeDelta * 9.093)
       terrainHoles.push({ x: hole.position.x, z: hole.position.z })
       if (excavation.depth > HAND_DIG_LIMIT) {
         deepTerrainHoles.push({ x: hole.position.x, z: hole.position.z })
@@ -1023,7 +1054,7 @@ export default function Surface3DScene({
     runtime.farm.visible = farmBuilt
     runtime.tool.visible = operation === 'mine' || operation === 'ice' || operation === 'repair' || operation === 'shield'
     runtime.solarPanel.position.x = -5.5
-  }, [playerX, playerY, playerLongitude, playerLatitude, baseLongitude, baseLatitude, habitatAnchor, resourceDeposits, excavations, farmBuilt, operation, jumping])
+  }, [playerLongitude, playerLatitude, baseLongitude, baseLatitude, mapCenterLongitude, mapCenterLatitude, habitatAnchor, resourceDeposits, excavations, farmBuilt, operation, jumping])
 
   useEffect(() => {
     const runtime = runtimeRef.current

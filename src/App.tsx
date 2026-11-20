@@ -102,6 +102,17 @@ type PlayerPosition = {
   worldY: number
 }
 
+type MapLocation = {
+  longitude: number
+  latitude: number
+}
+
+type FieldMapMarker = MapLocation & {
+  id: number
+  name: string
+  kind: 'base' | 'note'
+}
+
 const baseSites: Record<Planet, { id: string; label: string; summary: string; longitude: number; latitude: number }[]> = {
   Moon: [
     { id: 'south-pole', label: 'South Pole Crater', summary: 'Dark permanent-shadow ice fields and a cold but stable landing zone.', longitude: 0, latitude: -85 },
@@ -532,6 +543,11 @@ function App() {
   const [stationStatus, setStationStatus] = useState('Station secure · Airlock sealed · Vehicle on standby')
   const [playerPosition, setPlayerPosition] = useState<PlayerPosition>({ x: 50, y: 16, worldX: 0, worldY: 0 })
   const [mapCenter, setMapCenter] = useState({ x: 0, y: 0 })
+  const [explorationRoute, setExplorationRoute] = useState<MapLocation[]>([])
+  const [fieldMapMarkers, setFieldMapMarkers] = useState<FieldMapMarker[]>([])
+  const [fieldMapOpen, setFieldMapOpen] = useState(false)
+  const [fieldMapMarkerName, setFieldMapMarkerName] = useState('')
+  const nextMapMarkerId = useRef(0)
   const [jumping, setJumping] = useState(false)
   const [inventoryOpen, setInventoryOpen] = useState(false)
   const [insideHabitat, setInsideHabitat] = useState(false)
@@ -663,28 +679,34 @@ function App() {
     let x = playerPosition.x + dx * 2.2
     let y = playerPosition.y + dy * 2.2
     const worldX = ((playerPosition.worldX + dx * 0.25 + 180 + 360) % 360) - 180
-    const worldY = clamp(playerPosition.worldY + dy * 0.15, -85, 85)
-    let nextMapCenter = mapCenter
+    const worldY = clamp(playerPosition.worldY + dy * 0.15, -89.5, 89.5)
+    const nextMapCenter = {
+      x: clamp(Math.round(worldX / 8) * 8, -172, 172),
+      y: clamp(Math.round(worldY / 4) * 4, -86, 86),
+    }
 
     if (x >= 96) {
       x = 4
-      nextMapCenter = { ...nextMapCenter, x: worldX }
     } else if (x <= 4) {
       x = 96
-      nextMapCenter = { ...nextMapCenter, x: worldX }
     }
 
     if (y >= 82) {
       y = 12
-      nextMapCenter = { ...nextMapCenter, y: worldY }
     } else if (y <= 12) {
       y = 82
-      nextMapCenter = { ...nextMapCenter, y: worldY }
     }
 
     setPlayerPosition({ x, y, worldX, worldY })
+    setExplorationRoute((route) => {
+      const previous = route[route.length - 1]
+      if (previous && Math.hypot((worldX - previous.longitude) * Math.cos(worldY * Math.PI / 180), worldY - previous.latitude) < 0.02) {
+        return route
+      }
+      return [...route.slice(-1999), { longitude: worldX, latitude: worldY }]
+    })
     setInteractionMessage('')
-    if (nextMapCenter !== mapCenter) setMapCenter(nextMapCenter)
+    if (nextMapCenter.x !== mapCenter.x || nextMapCenter.y !== mapCenter.y) setMapCenter(nextMapCenter)
   }, [mapCenter, playerPosition])
 
   const startSurfaceMove = (key: string) => {
@@ -732,8 +754,29 @@ function App() {
     setRadioPending(false)
     baseRadioMessageId.current = 0
     setPlayerPosition({ x: 50, y: 46, worldX: landingSite.longitude, worldY: landingSite.latitude })
-    setMapCenter({ x: landingSite.longitude, y: landingSite.latitude })
+    setMapCenter({
+      x: clamp(Math.round(landingSite.longitude / 8) * 8, -172, 172),
+      y: clamp(Math.round(landingSite.latitude / 4) * 4, -86, 86),
+    })
+    setExplorationRoute([{ longitude: landingSite.longitude, latitude: landingSite.latitude }])
+    setFieldMapMarkers([])
+    setFieldMapOpen(false)
+    setFieldMapMarkerName('')
+    nextMapMarkerId.current = 0
     setScreen('launch')
+  }
+
+  const addFieldMapMarker = (name: string, location: MapLocation, kind: FieldMapMarker['kind']) => {
+    setFieldMapMarkers((markers) => [
+      ...markers,
+      {
+        id: ++nextMapMarkerId.current,
+        name,
+        longitude: location.longitude,
+        latitude: location.latitude,
+        kind,
+      },
+    ])
   }
 
   const interactAtStation = useCallback(() => {
@@ -870,7 +913,7 @@ function App() {
     }))
     .filter(({ distance }) => distance <= 2.8)
     .sort((a, b) => a.distance - b.distance)[0]?.deposit
-  const surfaceMovementDisabled = inventoryOpen || radioOpen || Boolean(activeOperation)
+  const surfaceMovementDisabled = inventoryOpen || radioOpen || fieldMapOpen || Boolean(activeOperation)
   const missionObjectives = [
     { label: 'Safe sols', complete: mission.safeSolStreak >= MISSION_SUCCESS_SAFE_SOLS, value: `${mission.safeSolStreak}/${MISSION_SUCCESS_SAFE_SOLS}` },
     { label: 'Build the base', complete: mission.habitat >= 2, value: mission.habitat >= 2 ? 'Operational' : 'First goal' },
@@ -1015,10 +1058,19 @@ function App() {
   }, [mission, nearHabitat, insideHabitat, completedOuterParts, playerPosition, commitMissionProgress])
 
   const enterHabitat = useCallback(() => {
-    if (!completedOuterParts || !nearHabitat || insideHabitat) return
+    if (insideHabitat) return
+    if (!completedOuterParts) {
+      setInteractionMessage('Build the foundation, pressure shell, and airlock before entering the base.')
+      return
+    }
+    if (!nearHabitat) {
+      setInteractionMessage('Move closer to the base airlock to enter.')
+      return
+    }
     setInventoryOpen(false)
     setLearningOpen(false)
     setRadioOpen(false)
+    setFieldMapOpen(false)
     setInsideHabitat(true)
     setInteractionMessage('Entered the habitat.')
   }, [completedOuterParts, nearHabitat, insideHabitat])
@@ -1233,7 +1285,7 @@ function App() {
     const handleSurfaceInteraction = (event: KeyboardEvent) => {
       const target = event.target
       if (target instanceof HTMLElement && target.matches('input, textarea, select, [contenteditable="true"]')) return
-      if (inventoryOpen || radioOpen || activeOperation) return
+      if (inventoryOpen || radioOpen || fieldMapOpen || activeOperation) return
       const key = event.key.toLowerCase()
       if (key === 'e') {
         event.preventDefault()
@@ -1251,7 +1303,7 @@ function App() {
     }
     window.addEventListener('keydown', handleSurfaceInteraction)
     return () => window.removeEventListener('keydown', handleSurfaceInteraction)
-  }, [screen, inventoryOpen, radioOpen, activeOperation, insideHabitat, interactAtSurface, digAtPlayer, enterHabitat, startSleep])
+  }, [screen, inventoryOpen, radioOpen, fieldMapOpen, activeOperation, insideHabitat, interactAtSurface, digAtPlayer, enterHabitat, startSleep])
 
   const endCurrentSol = () => {
     if (activeOperation) return
@@ -1433,6 +1485,7 @@ function App() {
         setInventoryOpen(false)
         setLearningOpen(false)
         setRadioOpen(false)
+        setFieldMapOpen(false)
         return
       }
     }
@@ -1494,6 +1547,32 @@ function App() {
   ]
 
   const missionOutcomeReasons = result === 'success' ? successReasons : failureReasons
+  const fieldMapLocations = [
+    ...explorationRoute,
+    { longitude: playerPosition.worldX, latitude: playerPosition.worldY },
+    ...fieldMapMarkers,
+  ]
+  const relativeMapLongitude = (longitude: number) =>
+    ((longitude - currentSite.longitude + 540) % 360) - 180
+  const mapLongitudes = fieldMapLocations.map((location) => relativeMapLongitude(location.longitude))
+  const mapLatitudes = fieldMapLocations.map((location) => location.latitude)
+  const mapMinLongitude = Math.min(...mapLongitudes)
+  const mapMaxLongitude = Math.max(...mapLongitudes)
+  const mapMinLatitude = Math.min(...mapLatitudes)
+  const mapMaxLatitude = Math.max(...mapLatitudes)
+  const mapLongitudeSpan = Math.max(mapMaxLongitude - mapMinLongitude, 0.05)
+  const mapLatitudeSpan = Math.max(mapMaxLatitude - mapMinLatitude, 0.05)
+  const projectMapPoint = (location: MapLocation) => ({
+    x: 24 + ((relativeMapLongitude(location.longitude) - mapMinLongitude) / mapLongitudeSpan) * 432,
+    y: 24 + ((mapMaxLatitude - location.latitude) / mapLatitudeSpan) * 272,
+  })
+  const mapRoutePath = explorationRoute.reduce((path, location, index) => {
+    const point = projectMapPoint(location)
+    const previous = explorationRoute[index - 1]
+    const startsNewSegment = previous &&
+      Math.abs(relativeMapLongitude(location.longitude) - relativeMapLongitude(previous.longitude)) > 180
+    return `${path}${index === 0 || startsNewSegment ? 'M' : 'L'}${point.x.toFixed(1)},${point.y.toFixed(1)} `
+  }, '')
 
   return (
     <div className="game-shell">
@@ -1601,6 +1680,7 @@ function App() {
                 <div><dt>Camera view</dt><dd>Q toggles first- and third-person; move the mouse to look around in first-person</dd></div>
                 <div><dt>Board and launch</dt><dd>Press E or Open airlock to watch the astronaut exit the station and board the rocket, then press Launch to depart</dd></div>
                 <div><dt>Inventory on surface</dt><dd>I, or Esc to close</dd></div>
+                <div><dt>Field map</dt><dd>Open Field map to see only your explored route; mark the landing site or add named pins at your current location</dd></div>
                 <div><dt>Explore</dt><dd>E extracts nearby resources or exits; H enters your habitat; G digs by hand, then starts the machine digger for deep drilling</dd></div>
                 <div><dt>Mars microphone recording</dt><dd>A recording plays at random intervals while exploring Mars, even with music enabled</dd></div>
                 <div><dt>Build</dt><dd>Open inventory and try placing habitat parts near the landing site</dd></div>
@@ -1689,10 +1769,10 @@ function App() {
             <Surface3DScene
               planet={mission.planet}
               terrainUrl={terrainBackground}
-              playerX={playerPosition.x}
-              playerY={playerPosition.y}
               playerLongitude={playerPosition.worldX}
               playerLatitude={playerPosition.worldY}
+              mapCenterLongitude={mapCenter.x}
+              mapCenterLatitude={mapCenter.y}
               baseLongitude={currentSite.longitude}
               baseLatitude={currentSite.latitude}
               farmBuilt={mission.farmBuilt}
@@ -1730,10 +1810,23 @@ function App() {
               <span>{insideHabitat ? 'Habitat interior · E exit' : 'E extract · H enter · G dig · Q view'}</span>
               <button
                 className="inventory-toggle"
+                aria-expanded={fieldMapOpen}
+                onClick={() => {
+                  setInventoryOpen(false)
+                  setLearningOpen(false)
+                  setRadioOpen(false)
+                  setFieldMapOpen((open) => !open)
+                }}
+              >
+                Field map · {explorationRoute.length} fixes
+              </button>
+              <button
+                className="inventory-toggle"
                 aria-expanded={inventoryOpen}
                 onClick={() => {
                   setLearningOpen(false)
                   setRadioOpen(false)
+                  setFieldMapOpen(false)
                   setInventoryOpen((open) => !open)
                 }}
               >
@@ -1745,6 +1838,7 @@ function App() {
                 onClick={() => {
                   setInventoryOpen(false)
                   setRadioOpen(false)
+                  setFieldMapOpen(false)
                   setLearningOpen((open) => !open)
                 }}
               >
@@ -1757,6 +1851,7 @@ function App() {
                   onClick={() => {
                     setInventoryOpen(false)
                     setLearningOpen(false)
+                    setFieldMapOpen(false)
                     setRadioOpen((open) => !open)
                   }}
                 >
@@ -1766,6 +1861,95 @@ function App() {
               <MusicToggle enabled={musicEnabled} trackName={musicTrackName} error={musicError} onToggle={toggleMusic} />
             </div>
           </div>
+
+          {fieldMapOpen && (
+            <section className="field-map-panel" role="dialog" aria-modal="true" aria-labelledby="field-map-title">
+              <div className="inventory-title">
+                <div>
+                  <strong id="field-map-title">{mission.planet.toUpperCase()} FIELD MAP</strong>
+                  <p>{explorationRoute.length} location fixes · Unexplored terrain is hidden</p>
+                </div>
+                <button onClick={() => setFieldMapOpen(false)}>Close</button>
+              </div>
+              <svg className="field-map-canvas" viewBox="0 0 480 320" role="img" aria-label={`${mission.planet} map showing explored route only`}>
+                <defs>
+                  <pattern id="field-map-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+                    <path d="M 32 0 L 0 0 0 32" fill="none" stroke="rgba(156, 190, 166, 0.18)" strokeWidth="1" />
+                  </pattern>
+                </defs>
+                <rect x="0" y="0" width="480" height="320" fill="#121d1b" />
+                <rect x="0" y="0" width="480" height="320" fill="url(#field-map-grid)" />
+                {mapRoutePath && (
+                  <>
+                    <path d={mapRoutePath} fill="none" stroke="#647e66" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" opacity="0.35" />
+                    <path d={mapRoutePath} fill="none" stroke="#b8d78e" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                  </>
+                )}
+                {explorationRoute.map((location, index) => {
+                  const point = projectMapPoint(location)
+                  return <circle key={`fix-${index}`} cx={point.x} cy={point.y} r="2.4" fill="#d0e6a3" opacity="0.55" />
+                })}
+                {fieldMapMarkers.map((marker) => {
+                  const point = projectMapPoint(marker)
+                  return (
+                    <g key={marker.id}>
+                      <path d={`M ${point.x} ${point.y - 7} L ${point.x + 6} ${point.y} L ${point.x} ${point.y + 7} L ${point.x - 6} ${point.y} Z`} fill={marker.kind === 'base' ? '#f0cb70' : '#f29b76'} stroke="#17221e" strokeWidth="1.5" />
+                      <text x={point.x + 9} y={point.y - 5} fill="#f3f1d8" fontSize="11" paintOrder="stroke" stroke="#121d1b" strokeWidth="3">{marker.name}</text>
+                    </g>
+                  )
+                })}
+                {(() => {
+                  const point = projectMapPoint({ longitude: playerPosition.worldX, latitude: playerPosition.worldY })
+                  return (
+                    <g>
+                      <circle cx={point.x} cy={point.y} r="8" fill="#63d5e8" stroke="#e6ffff" strokeWidth="2" />
+                      <circle cx={point.x} cy={point.y} r="13" fill="none" stroke="#63d5e8" strokeWidth="1.5" opacity="0.7" />
+                    </g>
+                  )
+                })()}
+              </svg>
+              <div className="field-map-legend">
+                <span><i className="map-legend-route" /> Explored route</span>
+                <span><i className="map-legend-player" /> You are here</span>
+                <span><i className="map-legend-pin" /> Your markers</span>
+              </div>
+              <div className="field-map-actions">
+                <button
+                  disabled={fieldMapMarkers.some((marker) => marker.kind === 'base')}
+                  onClick={() => addFieldMapMarker(`${currentSite.label} base`, currentSite, 'base')}
+                >
+                  {fieldMapMarkers.some((marker) => marker.kind === 'base') ? 'Base marked' : 'Mark landing site / base'}
+                </button>
+                <form onSubmit={(event) => {
+                  event.preventDefault()
+                  const name = fieldMapMarkerName.trim()
+                  if (!name) return
+                  addFieldMapMarker(name, { longitude: playerPosition.worldX, latitude: playerPosition.worldY }, 'note')
+                  setFieldMapMarkerName('')
+                }}>
+                  <label htmlFor="field-map-marker-name">Name this location</label>
+                  <input
+                    id="field-map-marker-name"
+                    value={fieldMapMarkerName}
+                    onChange={(event) => setFieldMapMarkerName(event.target.value)}
+                    maxLength={32}
+                    placeholder="e.g. Ice deposit"
+                  />
+                  <button type="submit" disabled={!fieldMapMarkerName.trim()}>Mark current location</button>
+                </form>
+              </div>
+              {fieldMapMarkers.length > 0 && (
+                <ul className="field-map-marker-list">
+                  {fieldMapMarkers.map((marker) => (
+                    <li key={marker.id}>
+                      <span>{marker.name} · {marker.longitude.toFixed(2)}°, {marker.latitude.toFixed(2)}°</span>
+                      <button aria-label={`Remove ${marker.name} marker`} onClick={() => setFieldMapMarkers((markers) => markers.filter((item) => item.id !== marker.id))}>×</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
 
         </main>
 
